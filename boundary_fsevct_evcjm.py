@@ -141,4 +141,3 @@ def boundary_fsevct_evcjm(train_features, train_labels, test_features, test_labe
     fpr, tpr, _ = roc_curve(all_labels, -all_test_logits_evcjm)
     np.save(options['save_path'] + '/' + options['boundary_type'] + '_fpr_EVCJM', fpr)
     np.save(options['save_path'] + '/' + options['boundary_type'] + '_tpr_EVCJM', tpr)
-
