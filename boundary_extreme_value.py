@@ -1,25 +1,55 @@
 """
-    这个函数是用于 OSR 测试的 极值边界法！
+    这个函数是用于 OSR 测试的 FSEVCT & EVCJM !!！
 """
 import numpy as np
-from Auxiliary.create_logfile import create_boundary_analysis_logfile
 from sklearn.metrics import roc_curve, roc_auc_score, f1_score
-from sklearn.metrics.pairwise import pairwise_distances
-import matplotlib.pyplot as plt
 from scipy.stats import genextreme as gev
-from scipy import stats
 import os
+import torch
+from copulae import GumbelCopula
 
 
-def boundary_extreme_value(train_features, train_labels, test_features, test_labels, out_features, out_labels,
+
+def normalized_mahalanobis_distance(samples, center):
+    """
+    计算所有样本到聚类中心的马氏距离
+    :param samples: 样本矩阵, 形状为 [n_samples, n_features]
+    :param center: 聚类中心向量, 形状为 [n_features]
+    :return: 马氏距离向量, 形状为 [n_samples]
+    """
+    # 计算协方差矩阵 (考虑样本自由度)
+    samples, center = torch.from_numpy(samples), torch.from_numpy(center)
+    cov_matrix = torch.cov(samples.T, correction=0)  # 形状 [n_features, n_features]
+
+    # 处理协方差矩阵不可逆问题（使用伪逆）
+    if cov_matrix.size(0) == cov_matrix.size(1):
+        try:
+            inv_cov = torch.linalg.inv(cov_matrix)
+        except torch.linalg.LinAlgError:  # 矩阵奇异时用伪逆
+            inv_cov = torch.linalg.pinv(cov_matrix)
+    else:  # 样本数 < 特征维数，直接用伪逆
+        inv_cov = torch.linalg.pinv(cov_matrix)
+
+    # 计算差值向量 [n_samples, n_features]
+    delta = samples - center
+
+    # 计算马氏距离: sqrt(delta^T * inv_cov * delta)
+    dists = torch.sqrt(torch.einsum('ni,ij,nj->n', delta, inv_cov, delta))
+    return dists
+    # mean_value = torch.mean(dists)
+    # std_value = torch.std(dists)
+    # return (dists-mean_value)/std_value
+
+
+def boundary_fsevct_evcjm(train_features, train_labels, test_features, test_labels, out_features, out_labels,
                            **options):
-    print("现在开始使用极值边界测试模型的开集性能！\n")
-    options['boundary_type'] = 'Boundary_extreme_value'
+    print("现在开始使用 FSEVCT & EVCJM 测试模型的开集性能！\n")
+    options['boundary_type'] = 'Boundary_FSEVCT_EVCJM'
 
     c_proto = np.array([train_features[np.argwhere(train_labels == p).ravel()].mean(0)
                         for p in range(options['num_classes'])])
 
-    num_bins = 50       # 这个数值算是个超参数吧，展示极值分布的 bin 的个数
+    num_bins = 40       # 这个数值算是个超参数吧，展示极值分布的 bin 的个数
     pdf_x, pdf_y = np.zeros((options['num_classes'], num_bins + 1)), np.zeros((options['num_classes'], num_bins))
     cdf_x, cdf_y = np.zeros((options['num_classes'], num_bins + 1)), np.zeros((options['num_classes'], num_bins))
     x, popt = np.zeros((options['num_classes'], 1000)), np.zeros((options['num_classes'], 2))
@@ -30,62 +60,85 @@ def boundary_extreme_value(train_features, train_labels, test_features, test_lab
         os.makedirs(gev_image_path)
 
     train_distance = {}
+    train_class_num = 0
     for p in range(options['num_classes']):
-        train_distance[str(p)] = pairwise_distances(
-            train_features[np.argwhere(train_labels == p).ravel()], c_proto[p, :].reshape(1, -1),
-            metric="euclidean", n_jobs=-1).ravel()
-
-        plt.figure()
+        train_distance[str(p)] = normalized_mahalanobis_distance(train_features[np.argwhere(train_labels == p).ravel()],
+                                                      c_proto[p, :].reshape(1, -1))
         c, loc, scale = gev.fit(train_distance[str(p)])
         parameters[p, 0], parameters[p, 1], parameters[p, 2] = c, loc, scale
-        pdf_y[p, :], pdf_x[p, :], _ = plt.hist(train_distance[str(p)], histtype='barstacked', density=True,
-                                               bins=num_bins, edgecolor='black')
-        plt.plot(pdf_x[p, :], gev.pdf(pdf_x[p, :], c, loc, scale),
-                 label=r'GEV_PDF: $\xi={:.3f}, \alpha={:.3f}, \beta={:.3f}$'.format(c, loc, scale))
-        plt.xlabel(r'$||\Theta(x)-O||_2$')
-        plt.ylabel('Probability density')
-        plt.legend()
-        plt.savefig(gev_image_path + 'GEV_PDF_{}.pdf'.format(p))
+        if p == 0:
+            train_class_num = train_distance[str(p)].shape[0]
+        else:
+            train_class_num = min(train_class_num, train_distance[str(p)].shape[0])
 
-        plt.figure()
-        cdf_y[p, :], cdf_x[p, :], _ = plt.hist(train_distance[str(p)], histtype='barstacked', density=True,
-                                               cumulative=True, bins=num_bins, edgecolor='black')
-        statistic, pvalue = stats.ks_2samp(cdf_y[p, :], gev.cdf(cdf_x[p, :], c, loc, scale))
-        x[p, :] = np.linspace(cdf_x[p, 0], cdf_x[p, -1], 1000)
-        plt.plot(x[p, :], gev.cdf(x[p, :], c, loc, scale), label='GEV_CDF: $P={:.3f}$'.format(pvalue))
-        plt.xlabel(r'$||\Theta(x)-O||_2$')
-        plt.ylabel('Probability')
-        plt.legend()
-        plt.savefig(gev_image_path + 'GEV_CDF_{}.pdf'.format(p))
 
-        plt.close()
+
+
+    gev_value = np.zeros((train_class_num, options['num_classes']))
+    for p in range(options['num_classes']):
+        gev_value[:, p] = gev.cdf(train_distance[str(p)], parameters[p, 0], parameters[p, 1], parameters[p, 2])[0:train_class_num]
+
+    # ######### EVCJM
+    cop = GumbelCopula(dim=options['num_classes'])
+    cop.fit(gev_value)
+    theta_hat = cop.params
+    print("当前 EVCJM 模型的 theta 参数为：", theta_hat)
 
     all_labels = np.concatenate((np.ones(test_labels.shape[0]), np.zeros(out_labels.shape[0])), axis=0)
-    all_test_logits = np.ones(len(all_labels))
-    y_pred = np.zeros((len(options['thresholds']), all_labels.shape[0]))
+    y_pred_fsevct = np.zeros((len(options['thresholds']), all_labels.shape[0]))
+    y_pred_evcjm = np.zeros((len(options['thresholds']), all_labels.shape[0]))
     y_true = np.concatenate((test_labels, options['num_classes'] * np.ones(out_labels.shape[0])), axis=0)
     all_test_features = np.concatenate((test_features, out_features), axis=0)
-    all_test_distance = pairwise_distances(all_test_features, c_proto, metric='euclidean', n_jobs=-1)
-    options['macro_f1'] = np.zeros(len(options['thresholds']))
+    all_test_distance = np.zeros((all_test_features.shape[0], options['num_classes']))
+    for i in range(options['num_classes']):
+        all_test_distance[:, i] = normalized_mahalanobis_distance(all_test_features, c_proto[i, :])
+    options['macro_f1_FSEVCT'] = np.zeros(len(options['thresholds']))
+    options['macro_f1_EVCJM'] = np.zeros(len(options['thresholds']))
 
-    location = None
+    func_list = [lambda xx: gev.cdf(xx, parameters[i, 0], parameters[i, 1], parameters[i, 2])
+                 for i in range(options['num_classes'])]
+    gev_outputs = np.zeros((all_test_distance.shape[0], options['num_classes']))
+
+    for i, func in enumerate(func_list):
+        vectorized_func = np.vectorize(func)
+        gev_outputs[:, i] = vectorized_func(all_test_distance[:, i])
+    all_test_logits_fsevct = gev_outputs
+    all_test_logits_evcjm = cop.cdf(gev_outputs)
+
+    evcjm_list = [lambda xx: (-np.log(gev.cdf(xx, parameters[i, 0], parameters[i, 1], parameters[i, 2])))**(theta_hat-1)
+                  for i in range(options['num_classes'])]
+    evcjm_outputs = np.zeros((all_test_distance.shape[0], options['num_classes']))
+    for i, func in enumerate(evcjm_list):
+        vectorized_func = np.vectorize(func)
+        evcjm_outputs[:, i] =  vectorized_func(all_test_distance[:, i])
+
     for p in range(len(options['thresholds'])):
         for q in range(len(all_labels)):
-            for r in range(options['num_classes']):
-                if all_test_logits[q] > gev.cdf(all_test_distance[q, r], parameters[r, 0], parameters[r, 1],
-                                                parameters[r, 2]):
-                    all_test_logits[q] = gev.cdf(all_test_distance[q, r], parameters[r, 0], parameters[r, 1],
-                                                 parameters[r, 2])
-                    location = r
-            if all_test_logits[q] >= options['thresholds'][p]:
-                y_pred[p, q] = options['num_classes']
+            # for r in range(options['num_classes']):
+            #     if all_test_logits_fsevct[q] > gev.cdf(all_test_distance[q, r], parameters[r, 0], parameters[r, 1],
+            #                                     parameters[r, 2]):
+            #         all_test_logits_fsevct[q] = gev.cdf(all_test_distance[q, r], parameters[r, 0], parameters[r, 1],
+            #                                      parameters[r, 2])
+            #         location = r
+            if np.min(all_test_logits_fsevct[q, :]) >= options['thresholds'][p]:
+                y_pred_fsevct[p, q] = options['num_classes']
             else:
-                y_pred[p, q] = location
-        options['macro_f1'][p] = f1_score(y_true, y_pred[p, :], average='macro')
+                y_pred_fsevct[p, q] = np.argmin(all_test_logits_fsevct[q, :])
 
-    options['auc'] = roc_auc_score(all_labels, -all_test_logits)
-    fpr, tpr, _ = roc_curve(all_labels, -all_test_logits)
-    np.save(options['save_path'] + '/' + options['boundary_type'] + '_fpr', fpr)
-    np.save(options['save_path'] + '/' + options['boundary_type'] + '_tpr', tpr)
+            if all_test_logits_evcjm[q] >= options['thresholds'][p]:
+                y_pred_evcjm[p, q] = options['num_classes']
+            else:
+                y_pred_evcjm[p, q] =np.argmax(evcjm_outputs[q, :])
+        options['macro_f1_FSEVCT'][p] = f1_score(y_true, y_pred_fsevct[p, :], average='macro')
+        options['macro_f1_EVCJM'][p] = f1_score(y_true, y_pred_evcjm[p, :], average='macro')
 
-    create_boundary_analysis_logfile(**options)
+    options['auc_fsevct'] = roc_auc_score(all_labels, -np.min(all_test_logits_fsevct, axis=1))
+    fpr, tpr, _ = roc_curve(all_labels, -np.min(all_test_logits_fsevct, axis=1))
+    np.save(options['save_path'] + '/' + options['boundary_type'] + '_fpr_FSEVCT', fpr)
+    np.save(options['save_path'] + '/' + options['boundary_type'] + '_tpr_FSEVCT', tpr)
+
+    options['auc_evcjm'] = roc_auc_score(all_labels, -all_test_logits_evcjm)
+    fpr, tpr, _ = roc_curve(all_labels, -all_test_logits_evcjm)
+    np.save(options['save_path'] + '/' + options['boundary_type'] + '_fpr_EVCJM', fpr)
+    np.save(options['save_path'] + '/' + options['boundary_type'] + '_tpr_EVCJM', tpr)
+
