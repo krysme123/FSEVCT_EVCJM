@@ -21,9 +21,6 @@
 ![Framework](/images/framework.png)
 *图1：FSEVCT-EVCJM 整体训练与测试流程图*
 
-![CDF-Fit](/images/cdf_fit.png)
-*图2：多个类簇归一化马氏距离的经验CDF与GEV分布拟合结果*
-
 ## 📝 论文与代码链接
 
 - **论文标题**：Feature space extreme value convergence theorem and copula joint model for open set recognition
