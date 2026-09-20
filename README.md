@@ -38,7 +38,8 @@ $$C_\theta(G_1, \ldots, G_N) = \exp\left(-\left(\sum_{i=1}^{N} [-\ln G_i(D_i)]^\
 ## 📊 框架图与实验结果
 
 ![Framework](/images/framework.png)
-*图1：FSEVCT-EVCJM 整体训练与测试流程图*
+
+*图：FSEVCT-EVCJM 整体训练与测试流程图*
 
 ## 📝 论文与代码链接
 
